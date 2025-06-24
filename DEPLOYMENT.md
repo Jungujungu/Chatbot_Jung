@@ -116,8 +116,8 @@ API_BASE_URL = "https://your-backend-url.railway.app"  # Your backend URL
 
 # Authentication (set to true for public access)
 ENABLE_AUTH = false  # Change to true for public deployment
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "your-secure-password"
+ADMIN_USERNAME = "Jung"
+ADMIN_PASSWORD = "Daddycarry12"
 
 # Optional settings
 MAX_REQUESTS_PER_MINUTE = 60
