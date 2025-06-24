@@ -89,12 +89,23 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
+    mode: Optional[str] = "research"  # "simple" or "research"
 
 class ChatResponse(BaseModel):
     response: str
     data: Optional[List[Dict[str, Any]]] = None
     sql_query: Optional[str] = None
     insights: Optional[str] = None
+    error: Optional[str] = None
+
+class TranslationRequest(BaseModel):
+    text: str
+    target_language: str = "Korean"
+
+class TranslationResponse(BaseModel):
+    translation: str
+    original_text: str
+    target_language: str
     error: Optional[str] = None
 
 class QueryIntent(BaseModel):
@@ -181,6 +192,7 @@ async def chat(request: ChatRequest):
     """Main chat endpoint for keyword performance analysis"""
     try:
         user_message = request.message.strip()
+        mode = request.mode or "research"
         
         if not user_message:
             return ChatResponse(
@@ -265,18 +277,31 @@ async def chat(request: ChatRequest):
                     error=f"SQL generation error: {str(e)}"
                 )
         
-        # Step 5: Generate insights and response
+        # Step 5: Generate insights and response based on mode
         try:
             if data is not None and not data.empty:
-                insights = claude.analyze_data(user_message, {"data": data_dict})
-                response = claude.generate_insights({"data": data_dict, "query": user_message})
+                if mode == "simple":
+                    # Simple mode: Quick, concise response
+                    response = claude.generate_simple_response(user_message, {"data": data_dict})
+                    insights = None  # No detailed insights in simple mode
+                else:
+                    # Research mode: Detailed analysis
+                    insights = claude.analyze_data(user_message, {"data": data_dict})
+                    response = claude.generate_insights({"data": data_dict, "query": user_message})
             else:
                 # Handle non-SQL queries (general questions, help, etc.)
-                response = claude.analyze_data(user_message, {"message": user_message})
-                insights = None
+                if mode == "simple":
+                    response = claude.generate_simple_response(user_message, {"message": user_message})
+                    insights = None
+                else:
+                    response = claude.analyze_data(user_message, {"message": user_message})
+                    insights = None
         except Exception as e:
             logger.error(f"Error generating insights: {e}")
-            response = "I analyzed your data but had trouble generating insights. Here's what I found in the data."
+            if mode == "simple":
+                response = "I found some data but couldn't provide a simple answer. Please try research mode for more details."
+            else:
+                response = "I analyzed your data but had trouble generating insights. Here's what I found in the data."
             insights = None
         
         return ChatResponse(
@@ -348,6 +373,57 @@ async def get_table_schema():
     except Exception as e:
         logger.error(f"Schema error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/translate", response_model=TranslationResponse)
+async def translate_text(request: TranslationRequest):
+    """Translate text to Korean using Claude AI"""
+    try:
+        text = request.text.strip()
+        target_language = request.target_language
+        
+        if not text:
+            return TranslationResponse(
+                translation="",
+                original_text="",
+                target_language=target_language,
+                error="Empty text provided"
+            )
+        
+        try:
+            claude = get_claude_client()
+        except Exception as e:
+            return TranslationResponse(
+                translation=text,  # Return original text if translation fails
+                original_text=text,
+                target_language=target_language,
+                error=f"Claude connection error: {str(e)}"
+            )
+        
+        # Generate translation using Claude
+        try:
+            translation = claude.translate_text(text, target_language)
+            return TranslationResponse(
+                translation=translation,
+                original_text=text,
+                target_language=target_language
+            )
+        except Exception as e:
+            logger.error(f"Translation error: {e}")
+            return TranslationResponse(
+                translation=text,  # Return original text if translation fails
+                original_text=text,
+                target_language=target_language,
+                error=f"Translation failed: {str(e)}"
+            )
+            
+    except Exception as e:
+        logger.error(f"Translation endpoint error: {e}")
+        return TranslationResponse(
+            translation=request.text,  # Return original text
+            original_text=request.text,
+            target_language=request.target_language,
+            error=str(e)
+        )
 
 if __name__ == "__main__":
     import uvicorn

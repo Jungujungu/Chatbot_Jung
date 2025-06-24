@@ -6,6 +6,9 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import json
 import os
+import time
+import threading
+from queue import Queue
 
 # Configuration - supports both local and deployed environments
 def get_api_base_url():
@@ -75,6 +78,39 @@ def check_api_health():
     except Exception as e:
         return False, {"error": str(e)}
 
+def translate_to_korean(text):
+    """Translate text to Korean using Claude AI"""
+    try:
+        # Use Claude AI for translation
+        response = requests.post(
+            f"{API_BASE_URL}/translate",
+            json={"text": text, "target_language": "Korean"},
+            timeout=30
+        )
+        if response.status_code == 200:
+            return response.json().get("translation", text)
+        else:
+            return text  # Return original text if translation fails
+    except Exception as e:
+        st.warning(f"Translation failed: {str(e)}")
+        return text
+
+def send_chat_message_with_mode(message, mode="research"):
+    """Send a message to the chat API with specified mode"""
+    try:
+        response = requests.post(
+            f"{API_BASE_URL}/chat",
+            json={"message": message, "mode": mode},
+            timeout=60 if mode == "research" else 30
+        )
+        return response.status_code == 200, response.json()
+    except requests.exceptions.Timeout:
+        return False, {"error": "Request timed out. Please try again."}
+    except requests.exceptions.ConnectionError:
+        return False, {"error": f"Cannot connect to API server at {API_BASE_URL}"}
+    except Exception as e:
+        return False, {"error": str(e)}
+
 def main_app():
     """Main application after authentication"""
     # Page configuration
@@ -99,6 +135,20 @@ def main_app():
     # Sidebar
     with st.sidebar:
         st.header("📊 Quick Actions")
+        
+        # Response Mode Selection
+        st.subheader("🎯 Response Mode")
+        response_mode = st.radio(
+            "Choose your response style:",
+            ["Simple Mode", "Research Mode"],
+            help="Simple Mode: Quick, concise answers. Research Mode: Detailed analysis with insights."
+        )
+        
+        # Mode descriptions
+        if response_mode == "Simple Mode":
+            st.info("💡 **Simple Mode**: Get quick, direct answers with minimal explanation.")
+        else:
+            st.info("🔬 **Research Mode**: Receive comprehensive analysis with detailed insights and recommendations.")
         
         # API Status
         st.subheader("🔍 API Status")
@@ -142,14 +192,23 @@ def main_app():
     # Main chat interface
     st.header("💬 Chat with Your Data")
     
-    # Initialize chat history
+    # Initialize chat history and translation state
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    if "last_response" not in st.session_state:
+        st.session_state.last_response = None
+    if "korean_translation" not in st.session_state:
+        st.session_state.korean_translation = None
 
     # Display chat history
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
+            
+            # Show Korean translation for assistant messages if available
+            if message["role"] == "assistant" and message.get("korean_translation"):
+                with st.expander("🇰🇷 한국어 번역"):
+                    st.markdown(message["korean_translation"])
 
     # Chat input
     if prompt := st.chat_input("Ask about your keyword performance..."):
@@ -158,77 +217,114 @@ def main_app():
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Get AI response
+        # Get AI response with progress indicator
         with st.chat_message("assistant"):
-            with st.spinner("🤔 Analyzing your data..."):
-                success, response = send_chat_message(prompt)
+            mode = "simple" if response_mode == "Simple Mode" else "research"
+            
+            if mode == "research":
+                # Research mode with progress indicators
+                progress_bar = st.progress(0)
+                status_text = st.empty()
                 
-                if success:
-                    # Display response
-                    st.markdown(response.get("response", "No response received"))
-                    
-                    # Display SQL query if available
-                    if response.get("sql_query"):
-                        with st.expander("🔍 Generated SQL Query"):
-                            st.code(response["sql_query"], language="sql")
-                    
-                    # Display data if available
-                    if response.get("data"):
-                        with st.expander("📊 Query Results"):
-                            df = pd.DataFrame(response["data"])
-                            st.dataframe(df)
+                # Progress stages for research mode
+                stages = [
+                    "🔍 Analyzing your question...",
+                    "📊 Querying the database...",
+                    "🤖 Generating AI insights...",
+                    "📈 Creating visualizations...",
+                    "✅ Finalizing response..."
+                ]
+                
+                for i, stage in enumerate(stages):
+                    progress_bar.progress((i + 1) / len(stages))
+                    status_text.text(stage)
+                    time.sleep(0.5)  # Simulate processing time
+                
+                status_text.text("✅ Analysis complete!")
+                time.sleep(0.5)
+                
+                # Clear progress indicators
+                progress_bar.empty()
+                status_text.empty()
+            
+            # Get response from API
+            success, response = send_chat_message_with_mode(prompt, mode)
+            
+            if success:
+                # Display response
+                response_text = response.get("response", "No response received")
+                st.markdown(response_text)
+                
+                # Store last response for translation
+                st.session_state.last_response = response_text
+                
+                # Display SQL query if available
+                if response.get("sql_query"):
+                    with st.expander("🔍 Generated SQL Query"):
+                        st.code(response["sql_query"], language="sql")
+                
+                # Display data if available
+                if response.get("data"):
+                    with st.expander("📊 Query Results"):
+                        df = pd.DataFrame(response["data"])
+                        st.dataframe(df)
+                        
+                        # Create visualizations
+                        if not df.empty:
+                            st.subheader("📈 Visualizations")
                             
-                            # Create visualizations
-                            if not df.empty:
-                                st.subheader("📈 Visualizations")
-                                
-                                # Time series if date column exists
-                                if 'DATE' in df.columns:
-                                    df['DATE'] = pd.to_datetime(df['DATE'])
-                                    fig = px.line(df, x='DATE', y='Impressions: Total Count', 
-                                                 title='Impressions Over Time')
-                                    st.plotly_chart(fig)
-                                
-                                # Top performers chart
-                                if 'SEARCH_QUERY' in df.columns and 'Purchases: Total Count' in df.columns:
-                                    top_keywords = df.nlargest(10, 'Purchases: Total Count')
-                                    fig = px.bar(top_keywords, x='SEARCH_QUERY', y='Purchases: Total Count',
-                                                title='Top 10 Keywords by Purchases')
-                                    st.plotly_chart(fig)
-                    
-                    # Display insights if available
-                    if response.get("insights"):
-                        with st.expander("💡 AI Insights"):
-                            st.markdown(response["insights"])
-                    
-                    # Add assistant response to chat history
-                    st.session_state.messages.append({"role": "assistant", "content": response.get("response", "")})
-                    
-                else:
-                    error_msg = response.get("error", "Unknown error occurred")
-                    st.error(f"❌ Error: {error_msg}")
-                    st.session_state.messages.append({"role": "assistant", "content": f"Sorry, I encountered an error: {error_msg}"})
+                            # Time series if date column exists
+                            if 'DATE' in df.columns:
+                                df['DATE'] = pd.to_datetime(df['DATE'])
+                                fig = px.line(df, x='DATE', y='Impressions: Total Count', 
+                                             title='Impressions Over Time')
+                                st.plotly_chart(fig)
+                            
+                            # Top performers chart
+                            if 'SEARCH_QUERY' in df.columns and 'Purchases: Total Count' in df.columns:
+                                top_keywords = df.nlargest(10, 'Purchases: Total Count')
+                                fig = px.bar(top_keywords, x='SEARCH_QUERY', y='Purchases: Total Count',
+                                            title='Top 10 Keywords by Purchases')
+                                st.plotly_chart(fig)
+                
+                # Display insights if available
+                if response.get("insights"):
+                    with st.expander("💡 AI Insights"):
+                        st.markdown(response["insights"])
+                
+                # Add assistant response to chat history
+                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                
+            else:
+                error_msg = response.get("error", "Unknown error occurred")
+                st.error(f"❌ Error: {error_msg}")
+                st.session_state.messages.append({"role": "assistant", "content": f"Sorry, I encountered an error: {error_msg}"})
+
+    # Korean Translation Button (only show if there's a last response)
+    if st.session_state.last_response:
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("🇰🇷 Translate to Korean"):
+                with st.spinner("Translating to Korean..."):
+                    korean_text = translate_to_korean(st.session_state.last_response)
+                    st.session_state.korean_translation = korean_text
+                    st.rerun()
+        
+        # Display Korean translation if available
+        if st.session_state.korean_translation:
+            with st.expander("🇰🇷 한국어 번역", expanded=True):
+                st.markdown(st.session_state.korean_translation)
 
     # Clear chat button
     if st.button("🗑️ Clear Chat History"):
         st.session_state.messages = []
+        st.session_state.last_response = None
+        st.session_state.korean_translation = None
         st.rerun()
 
 def send_chat_message(message):
-    """Send a message to the chat API"""
-    try:
-        response = requests.post(
-            f"{API_BASE_URL}/chat",
-            json={"message": message},
-            timeout=30
-        )
-        return response.status_code == 200, response.json()
-    except requests.exceptions.Timeout:
-        return False, {"error": "Request timed out. Please try again."}
-    except requests.exceptions.ConnectionError:
-        return False, {"error": f"Cannot connect to API server at {API_BASE_URL}"}
-    except Exception as e:
-        return False, {"error": str(e)}
+    """Send a message to the chat API (legacy function for compatibility)"""
+    return send_chat_message_with_mode(message, "research")
 
 def get_performance_summary():
     """Get performance summary from API"""
