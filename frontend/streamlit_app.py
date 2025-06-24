@@ -154,11 +154,6 @@ def main_app():
         st.subheader("🔍 API Status")
         if api_healthy:
             st.success("✅ Connected")
-            if health_data and isinstance(health_data, dict) and 'data_summary' in health_data:
-                summary = health_data['data_summary']
-                if isinstance(summary, dict):
-                    st.write(f"**Total Keywords:** {summary.get('TOTAL_KEYWORDS', 'N/A'):,}")
-                    st.write(f"**Total Impressions:** {summary.get('TOTAL_IMPRESSIONS', 'N/A'):,}")
         
         # Performance Summary
         if st.button("📈 Get Performance Summary"):
@@ -171,12 +166,11 @@ def main_app():
         
         # Top Keywords
         metric = st.selectbox("Top Keywords by:", ["purchases", "clicks", "impressions", "cart_adds"])
-        limit = st.slider("Number of results:", 5, 50, 10)
         
-        if st.button(f"🏆 Get Top {limit} Keywords"):
-            success, data = get_top_keywords(metric, limit)
+        if st.button(f"🏆 Get Top Keywords"):
+            success, data = get_top_keywords(metric, 10)  # Fixed to 10 results
             if success:
-                st.success(f"✅ Top {limit} keywords loaded!")
+                st.success(f"✅ Top keywords loaded!")
                 if data.get('results'):
                     df = pd.DataFrame(data['results'])
                     st.dataframe(df)
@@ -195,10 +189,6 @@ def main_app():
     # Initialize chat history and translation state
     if "messages" not in st.session_state:
         st.session_state.messages = []
-    if "last_response" not in st.session_state:
-        st.session_state.last_response = None
-    if "korean_translation" not in st.session_state:
-        st.session_state.korean_translation = None
 
     # Display chat history
     for message in st.session_state.messages:
@@ -247,16 +237,25 @@ def main_app():
                 progress_bar.empty()
                 status_text.empty()
             
-            # Get response from API
+            # Get response from API with streaming
             success, response = send_chat_message_with_mode(prompt, mode)
             
             if success:
-                # Display response
+                # Display response with real-time streaming effect
                 response_text = response.get("response", "No response received")
-                st.markdown(response_text)
                 
-                # Store last response for translation
-                st.session_state.last_response = response_text
+                # Create a placeholder for streaming effect
+                response_placeholder = st.empty()
+                
+                # Simulate streaming effect by showing text character by character
+                displayed_text = ""
+                for char in response_text:
+                    displayed_text += char
+                    response_placeholder.markdown(displayed_text + "▌")  # Add cursor effect
+                    time.sleep(0.01)  # Adjust speed as needed
+                
+                # Final display without cursor
+                response_placeholder.markdown(response_text)
                 
                 # Display SQL query if available
                 if response.get("sql_query"):
@@ -292,34 +291,42 @@ def main_app():
                     with st.expander("💡 AI Insights"):
                         st.markdown(response["insights"])
                 
-                # Add assistant response to chat history
-                st.session_state.messages.append({"role": "assistant", "content": response_text})
+                # Add assistant response to chat history with translation button
+                message_key = f"msg_{len(st.session_state.messages)}"
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": response_text,
+                    "message_key": message_key
+                })
+                
+                # Add translation button for this specific message
+                col1, col2 = st.columns([1, 4])
+                with col1:
+                    if st.button(f"🇰🇷 Translate", key=f"translate_{message_key}"):
+                        with st.spinner("Translating to Korean..."):
+                            korean_text = translate_to_korean(response_text)
+                            # Update the specific message with translation
+                            for msg in st.session_state.messages:
+                                if msg.get("message_key") == message_key:
+                                    msg["korean_translation"] = korean_text
+                                    break
+                            st.rerun()
+                
+                # Display Korean translation if available for this message
+                for msg in st.session_state.messages:
+                    if msg.get("message_key") == message_key and msg.get("korean_translation"):
+                        with st.expander("🇰🇷 한국어 번역", expanded=True):
+                            st.markdown(msg["korean_translation"])
+                        break
                 
             else:
                 error_msg = response.get("error", "Unknown error occurred")
                 st.error(f"❌ Error: {error_msg}")
                 st.session_state.messages.append({"role": "assistant", "content": f"Sorry, I encountered an error: {error_msg}"})
 
-    # Korean Translation Button (only show if there's a last response)
-    if st.session_state.last_response:
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            if st.button("🇰🇷 Translate to Korean"):
-                with st.spinner("Translating to Korean..."):
-                    korean_text = translate_to_korean(st.session_state.last_response)
-                    st.session_state.korean_translation = korean_text
-                    st.rerun()
-        
-        # Display Korean translation if available
-        if st.session_state.korean_translation:
-            with st.expander("🇰🇷 한국어 번역", expanded=True):
-                st.markdown(st.session_state.korean_translation)
-
     # Clear chat button
     if st.button("🗑️ Clear Chat History"):
         st.session_state.messages = []
-        st.session_state.last_response = None
-        st.session_state.korean_translation = None
         st.rerun()
 
 def send_chat_message(message):

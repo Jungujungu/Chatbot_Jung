@@ -73,11 +73,18 @@ class ClaudeClient:
             8. For CTR: CASE WHEN "Impressions: Total Count" > 0 THEN "Clicks: Total Count" / "Impressions: Total Count" ELSE 0 END
             9. For conversion rate: CASE WHEN "Clicks: Total Count" > 0 THEN "Purchases: Total Count" / "Clicks: Total Count" ELSE 0 END
             10. For cart add rate: CASE WHEN "Clicks: Total Count" > 0 THEN "Cart Adds: Total Count" / "Clicks: Total Count" ELSE 0 END
+            11. LIMIT rules:
+                - If user specifies a number (e.g., "top 20", "show 5"), use that number
+                - If user says "top" without a number, use LIMIT 10
+                - If no limit mentioned, use LIMIT 10 as default
+                - Maximum limit is 100
             
             Example queries:
             - "top 10 keywords by purchases" → "SELECT SEARCH_QUERY, \"Purchases: Total Count\" FROM {Config.KEYWORD_TABLE} ORDER BY \"Purchases: Total Count\" DESC LIMIT 10"
-            - "keywords with high conversion rate" → "SELECT SEARCH_QUERY, CASE WHEN \"Clicks: Total Count\" > 0 THEN \"Purchases: Total Count\" / \"Clicks: Total Count\" ELSE 0 END as conversion_rate FROM {Config.KEYWORD_TABLE} WHERE \"Clicks: Total Count\" > 0 ORDER BY conversion_rate DESC"
-            - "keywords with low CTR" → "SELECT SEARCH_QUERY, CASE WHEN \"Impressions: Total Count\" > 0 THEN \"Clicks: Total Count\" / \"Impressions: Total Count\" ELSE 0 END as ctr FROM {Config.KEYWORD_TABLE} WHERE \"Impressions: Total Count\" > 100 ORDER BY ctr ASC"
+            - "top 20 keywords by clicks" → "SELECT SEARCH_QUERY, \"Clicks: Total Count\" FROM {Config.KEYWORD_TABLE} ORDER BY \"Clicks: Total Count\" DESC LIMIT 20"
+            - "show top 5 keywords" → "SELECT SEARCH_QUERY, \"Purchases: Total Count\" FROM {Config.KEYWORD_TABLE} ORDER BY \"Purchases: Total Count\" DESC LIMIT 5"
+            - "keywords with high conversion rate" → "SELECT SEARCH_QUERY, CASE WHEN \"Clicks: Total Count\" > 0 THEN \"Purchases: Total Count\" / \"Clicks: Total Count\" ELSE 0 END as conversion_rate FROM {Config.KEYWORD_TABLE} WHERE \"Clicks: Total Count\" > 0 ORDER BY conversion_rate DESC LIMIT 10"
+            - "keywords with low CTR" → "SELECT SEARCH_QUERY, CASE WHEN \"Impressions: Total Count\" > 0 THEN \"Clicks: Total Count\" / \"Impressions: Total Count\" ELSE 0 END as ctr FROM {Config.KEYWORD_TABLE} WHERE \"Impressions: Total Count\" > 100 ORDER BY ctr ASC LIMIT 10"
             """
             
             response = self._make_api_call(
